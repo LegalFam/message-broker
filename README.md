@@ -127,15 +127,88 @@ sudo docker exec legalfam-rabbitmq rabbitmqctl list_users
 
 Do not expose RabbitMQ publicly.
 
-Allow AMQP `5672` only from the Cloud Run VPC egress source range or the subnet that Cloud Run uses:
+### If The Backend Is Not Configured In Cloud Run Yet
+
+If RabbitMQ is being set up before the Cloud Run backend exists, create the firewall rule using the subnet CIDR that Cloud Run will use later.
+
+Get the CIDR of the subnet:
+
+```bash
+gcloud compute networks subnets describe default \
+  --region=us-central1 \
+  --format="value(ipCidrRange)"
+```
+
+Then allow AMQP `5672` from that subnet to the RabbitMQ VM:
 
 ```bash
 gcloud compute firewall-rules create allow-cloudrun-to-rabbitmq \
   --network=default \
   --allow=tcp:5672 \
-  --source-ranges=<cloud-run-vpc-source-cidr> \
+  --source-ranges=<subnet-cidr-from-command-above> \
   --target-tags=rabbitmq
 ```
+
+For example, if the subnet command returns `10.128.0.0/20`, use:
+
+```bash
+gcloud compute firewall-rules create allow-cloudrun-to-rabbitmq \
+  --network=default \
+  --allow=tcp:5672 \
+  --source-ranges=10.128.0.0/20 \
+  --target-tags=rabbitmq
+```
+
+When the backend is deployed later, configure Cloud Run with that same network and subnet:
+
+```bash
+gcloud run services update legalfam-backend \
+  --region=us-central1 \
+  --network=default \
+  --subnet=default \
+  --vpc-egress=private-ranges-only
+```
+
+### If The Backend Is Already Configured In Cloud Run
+
+If you use Cloud Run Direct VPC egress and the backend service already exists, prefer a Cloud Run network tag and allow that tag to reach the RabbitMQ VM:
+
+```bash
+gcloud run services update legalfam-backend \
+  --region=us-central1 \
+  --network=default \
+  --subnet=default \
+  --network-tags=cloud-run-backend \
+  --vpc-egress=private-ranges-only
+
+gcloud compute firewall-rules create allow-cloudrun-to-rabbitmq \
+  --network=default \
+  --allow=tcp:5672 \
+  --source-tags=cloud-run-backend \
+  --target-tags=rabbitmq
+```
+
+### Fallback Without Network Tags
+
+If you cannot use network tags, allow AMQP `5672` from the subnet CIDR that Cloud Run uses for Direct VPC egress:
+
+```bash
+gcloud compute networks subnets describe default \
+  --region=us-central1 \
+  --format="value(ipCidrRange)"
+```
+
+Then use that value as `--source-ranges`:
+
+```bash
+gcloud compute firewall-rules create allow-cloudrun-to-rabbitmq \
+  --network=default \
+  --allow=tcp:5672 \
+  --source-ranges=<subnet-cidr-from-command-above> \
+  --target-tags=rabbitmq
+```
+
+For example, if the subnet command returns `10.128.0.0/20`, use `--source-ranges=10.128.0.0/20`.
 
 The management UI is bound to `127.0.0.1:15672` on the VM. Access it through an SSH tunnel:
 
